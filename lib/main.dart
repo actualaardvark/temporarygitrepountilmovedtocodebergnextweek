@@ -1,6 +1,4 @@
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'dart:math' as math;
 import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
@@ -8,14 +6,12 @@ import 'package:path/path.dart';
 class DBSetting {
   final String name;
   final String userVisibleName;
-  final String description;
   final String value;
   final String icon;
 
   const DBSetting({
     required this.name,
     required this.userVisibleName,
-    required this.description,
     required this.value,
     required this.icon,
   });
@@ -23,7 +19,6 @@ class DBSetting {
     return {
       "name": name,
       "userVisibleName": userVisibleName,
-      "description": description,
       "value": value,
       "icon": icon,
     };
@@ -31,12 +26,11 @@ class DBSetting {
 
   @override
   String toString() {
-    return 'DBSetting{name: $name, userVisibleName: $userVisibleName, description: $description, value: $value}';
+    return 'DBSetting{name: $name, userVisibleName: $userVisibleName, value: $value}';
   }
 }
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+Future<void> insertSetting(DBSetting setting) async {
   final database = openDatabase(
     join(await getDatabasesPath(), 'settings_database.db'),
     onCreate: (db, version) {
@@ -46,37 +40,90 @@ void main() async {
     version: 1,
   );
 
-  Future<void> insertSetting(DBSetting setting) async {
-    final db = await database;
+  final db = await database;
+  await db.insert(
+    "settings",
+    setting.toMap(),
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
+}
+
+void loadDefaults() async {
+  final database = openDatabase(
+    join(await getDatabasesPath(), 'settings_database.db'),
+    onCreate: (db, version) {
+      return db.execute(
+          'CREATE TABLE settings(name TEXT PRIMARY KEY, userVisibleName TEXT, value TEXT, icon TEXT)');
+    },
+    version: 1,
+  );
+
+  final db = await database;
+  const defaults = <DBSetting>[
+    DBSetting(
+      name: "debugmode",
+      icon: "0xf8a0",
+      userVisibleName: "Debug Mode",
+      value: "false",
+    ),
+    DBSetting(
+      name: "darkmode",
+      icon: "0xf717",
+      userVisibleName: "Dark Mode",
+      value: "false",
+    )
+  ];
+  for (var i in defaults) {
     await db.insert(
       "settings",
-      setting.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
+      i.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
     );
   }
+}
 
-  Future<List<DBSetting>> savedSettings() async {
-    final db = await database;
-    final List<Map<String, Object?>> settingMaps = await db.query("settings");
-    return [
-      for (final {
-            "name": name as String,
-            "userVisibleName": userVisibleName as String,
-            "description": description as String,
-            "value": value as String,
-            "icon": icon as String,
-          } in settingMaps)
-        DBSetting(
-          name: name,
-          userVisibleName: userVisibleName,
-          description: description,
-          value: value,
-          icon: icon,
-        )
-    ];
+Future<List<DBSetting>> savedSettings() async {
+  final database = openDatabase(
+    join(await getDatabasesPath(), 'settings_database.db'),
+    onCreate: (db, version) {
+      loadDefaults();
+      return db.execute(
+          'CREATE TABLE settings(name TEXT PRIMARY KEY, userVisibleName TEXT, value TEXT, icon TEXT)');
+    },
+    version: 1,
+  );
+  final db = await database;
+  final List<Map<String, Object?>> settingMaps = await db.query("settings");
+  return [
+    for (final {
+          "name": name as String,
+          "userVisibleName": userVisibleName as String,
+          "value": value as String,
+          "icon": icon as String,
+        } in settingMaps)
+      DBSetting(
+        name: name,
+        userVisibleName: userVisibleName,
+        value: value,
+        icon: icon,
+      )
+  ];
+}
+
+Future<bool> getActivated(String name) async {
+  var settings = await savedSettings();
+  for (var i in settings) {
+    if (i.toMap()["name"] == name) {
+      return i.toMap()["value"] == true;
+    }
   }
+  return false;
+}
 
-  print(await savedSettings());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  loadDefaults();
+
   runApp(Hyacinth());
 }
 
@@ -110,7 +157,7 @@ class _HyacinthHomePageState extends State<HyacinthHomePage> {
         ][index];
       },
       tabBar: CupertinoTabBar(
-        currentIndex: 1,
+        currentIndex: 0,
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(
             icon: Icon(CupertinoIcons.lock),
@@ -146,12 +193,43 @@ class HyacinthSettingsPage extends StatelessWidget {
   const HyacinthSettingsPage({Key? key}) : super(key: key);
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      child: Column(
-        children: <Widget>[
-          SwitchSetting(name: "darkmode", icon: "moon"),
-        ],
-      ),
+    return FutureBuilder(
+      builder: (BuildContext ctx, AsyncSnapshot<List<DBSetting>> snapshot) {
+        if (ConnectionState.done == snapshot.connectionState) {
+          var remappedData = snapshot.data?.map((x) => x.toMap());
+          if (remappedData != null) {
+            return CupertinoPageScaffold(
+              child: Column(
+                children: <Widget>[
+                  CupertinoListSection(
+                    header: const Text("Preferences"),
+                    topMargin: 50,
+                    children: <SwitchSetting>[
+                      for (final {
+                            "name": name as String,
+                            "userVisibleName": userVisibleName as String,
+                            "value": value as String,
+                            "icon": icon as String,
+                          } in remappedData)
+                        SwitchSetting(
+                          name: name,
+                          userVisibleName: userVisibleName,
+                          value: value,
+                          icon: int.parse(icon),
+                        )
+                    ],
+                  )
+                ],
+              ),
+            );
+          } else {
+            return const CupertinoActivityIndicator();
+          }
+        } else {
+          return const CupertinoActivityIndicator();
+        }
+      },
+      future: savedSettings(),
     );
   }
 }
@@ -159,10 +237,14 @@ class HyacinthSettingsPage extends StatelessWidget {
 class SwitchSetting extends StatefulWidget {
   final String name;
   final int icon;
-  SwitchSetting({
+  final String userVisibleName;
+  final String value;
+  const SwitchSetting({
     super.key,
     required this.name,
     required this.icon,
+    required this.value,
+    required this.userVisibleName,
   });
 
   @override
@@ -170,18 +252,28 @@ class SwitchSetting extends StatefulWidget {
 }
 
 class SwitchSettingState extends State<SwitchSetting> {
-  bool _lights = true;
+  bool _lights = false;
+  bool freshInit = true;
 
   @override
   Widget build(BuildContext context) {
+    if (freshInit == true) {
+      _lights = widget.value == "true";
+      freshInit = false;
+    }
     return MergeSemantics(
       child: CupertinoListTile(
         title: Row(
           children: <Widget>[
             Icon(
-              IconData(widget.icon, fontFamily: 'MaterialIcons'),
+              IconData(
+                widget.icon,
+                fontFamily: 'CupertinoIcons',
+                fontPackage: 'cupertino_icons',
+              ),
             ),
-            Text(widget.name),
+            const Text(" "),
+            Text(widget.userVisibleName),
           ],
         ),
         trailing: CupertinoSwitch(
@@ -196,6 +288,14 @@ class SwitchSettingState extends State<SwitchSetting> {
           setState(() {
             _lights = !_lights;
           });
+          insertSetting(
+            DBSetting(
+              userVisibleName: widget.userVisibleName,
+              name: widget.name,
+              icon: widget.icon.toString(),
+              value: _lights.toString(),
+            ),
+          );
         },
       ),
     );
@@ -220,18 +320,16 @@ class HyacinthScanner extends StatelessWidget {
   const HyacinthScanner({Key? key}) : super(key: key);
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
+    return const CupertinoPageScaffold(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: <Widget>[
           Center(
-            child: HyacinthScannerOverlap(),
-          ),
-          const Center(
             child: CupertinoActivityIndicator(
               radius: 32,
             ),
           ),
+          Center(child: Text("Scanner Active")),
         ],
       ),
     );
